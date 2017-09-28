@@ -22,15 +22,14 @@
 
 /**
  * Public constructor.
- * @param {Object}       uri     The URI descriptor object.
- * @param {HTMLDocument} doc     The document to parse.
  * @param {Object}       options The options object.
  */
-function Readability(uri, doc, options) {
+function Readability(options) {
   options = options || {};
 
-  this._uri = uri;
-  this._doc = doc;
+  this._uri = document.location;
+  this._doc = document;
+  this._docClone = document.documentElement.cloneNode(true);
   this._biggestFrame = false;
   this._articleTitle = null;
   this._articleByline = null;
@@ -61,7 +60,7 @@ function Readability(uri, doc, options) {
   var logEl;
 
   // Control whether log messages are sent to the console
-  if (this._debug) {
+  if (this._debug || true) {
     logEl = function(e) {
       var rv = e.nodeName + " ";
       if (e.nodeType == e.TEXT_NODE) {
@@ -306,7 +305,7 @@ Readability.prototype = {
    * @return void
    **/
   _getArticleTitle: function() {
-    var doc = this._doc;
+    var doc = this._docClone;
     var curTitle = "";
     var origTitle = "";
 
@@ -380,13 +379,13 @@ Readability.prototype = {
    * @return void
    **/
   _prepDocument: function() {
-    var doc = this._doc;
+    var doc = this._docClone;
 
     // Remove all style tags in head
     this._removeNodes(doc.getElementsByTagName("style"));
 
-    if (doc.body) {
-      this._replaceBrs(doc.body);
+    if (doc.getElementsByTagName("body")[0]) {
+      this._replaceBrs(doc.getElementsByTagName("body")[0]);
     }
 
     this._replaceNodeTags(doc.getElementsByTagName("font"), "SPAN");
@@ -465,7 +464,7 @@ Readability.prototype = {
       return node;
     }
 
-    var replacement = node.ownerDocument.createElement(tag);
+    var replacement = this._doc.createElement(tag);
     while (node.firstChild) {
       replacement.appendChild(node.firstChild);
     }
@@ -705,10 +704,10 @@ Readability.prototype = {
   **/
   _grabArticle: function (page) {
     this.log("**** grabArticle ****");
-    var doc = this._doc;
+    var doc = this._docClone;
     var isPaging = (page !== null ? true: false);
-    page = page ? page : this._doc.body;
-
+    page = page ? page : this._docClone.getElementsByTagName("body")[0];
+    console.log("_grabArticle", page);
     // We can't grab an article if we don't have a page!
     if (!page) {
       this.log("No body found in document. Abort.");
@@ -724,7 +723,7 @@ Readability.prototype = {
       // class name "comment", etc), and turn divs into P tags where they have been
       // used inappropriately (as in, where they contain no other block level elements.)
       var elementsToScore = [];
-      var node = this._doc.documentElement;
+      var node = this._docClone;
 
       while (node) {
         var matchString = node.className + " " + node.id;
@@ -777,7 +776,7 @@ Readability.prototype = {
             // EXPERIMENTAL
             this._forEachNode(node.childNodes, function(childNode) {
               if (childNode.nodeType === Node.TEXT_NODE && childNode.textContent.trim().length > 0) {
-                var p = doc.createElement('p');
+                var p = this._doc.createElement('p');
                 p.textContent = childNode.textContent;
                 p.style.display = 'inline';
                 p.className = 'readability-styled';
@@ -879,7 +878,7 @@ Readability.prototype = {
       // We also have to copy the body node so it is something we can modify.
       if (topCandidate === null || topCandidate.tagName === "BODY") {
         // Move all of the page's children into topCandidate
-        topCandidate = doc.createElement("DIV");
+        topCandidate = this._doc.createElement("DIV");
         neededToCreateTopCandidate = true;
         // Move everything (not just elements, also text nodes etc.) into the container
         // so we even include text directly in the body:
@@ -963,7 +962,7 @@ Readability.prototype = {
       // Now that we have the top candidate, look through its siblings for content
       // that might also be related. Things like preambles, content split by ads
       // that we removed, etc.
-      var articleContent = doc.createElement("DIV");
+      var articleContent = this._doc.createElement("DIV");
       if (isPaging)
         articleContent.id = "readability-content";
 
@@ -971,7 +970,8 @@ Readability.prototype = {
       // Keep potential top candidate's parent node to try to get text direction of it later.
       parentOfTopCandidate = topCandidate.parentNode;
       var siblings = parentOfTopCandidate.children;
-
+      var appendedCount = 0;
+      var nodeToCheck = null;
       for (var s = 0, sl = siblings.length; s < sl; s++) {
         var sibling = siblings[s];
         var append = false;
@@ -1015,8 +1015,13 @@ Readability.prototype = {
 
             sibling = this._setNodeTag(sibling, "DIV");
           }
-
-          articleContent.appendChild(sibling);
+          appendedCount = appendedCount + 1;
+          if (appendedCount === 1) {
+            nodeToCheck = sibling;
+          }/* else if (appendedCount === 2) {
+            nodeToCheck = nodeToCheck.parentNode;
+          }*/
+          //articleContent.appendChild(sibling);
           // siblings is a reference to the children array, and
           // sibling is removed from the array when we call appendChild().
           // As a result, we must revisit this index since the nodes
@@ -1026,35 +1031,65 @@ Readability.prototype = {
         }
       }
 
-      if (this._debug)
-        this.log("Article content pre-prep: " + articleContent.innerHTML);
-      // So we have all of the content that we need. Now we clean it up for presentation.
-      this._prepArticle(articleContent);
-      if (this._debug)
-        this.log("Article content post-prep: " + articleContent.innerHTML);
+      var theElement = null;
+      var nodeClasses = nodeToCheck.className.trim().split(/\s+/);
+      var nodeId = nodeToCheck.getAttribute("id");
+      var parentNodeClasses = nodeToCheck.parentNode.className.trim().split(/\s+/);
+      var parentNodeId = nodeToCheck.parentNode.getAttribute("id");
 
-      if (this._curPageNum === 1) {
-        if (neededToCreateTopCandidate) {
-          // We already created a fake div thing, and there wouldn't have been any siblings left
-          // for the previous loop, so there's no point trying to create a new div, and then
-          // move all the children over. Just assign IDs and class names here. No need to append
-          // because that already happened anyway.
-          topCandidate.id = "readability-page-1";
-          topCandidate.className = "page";
-        } else {
-          var div = doc.createElement("DIV");
-          div.id = "readability-page-1";
-          div.className = "page";
-          var children = articleContent.childNodes;
-          while (children.length) {
-            div.appendChild(children[0]);
-          }
-          articleContent.appendChild(div);
+      if (nodeClasses.length === 1 && nodeClasses[0] === "" ) {
+        nodeClasses = [];
+      }
+      if (parentNodeClasses.length === 1 && parentNodeClasses[0] === "" ) {
+        parentNodeClasses = [];
+      }
+      console.log(nodeClasses, parentNodeClasses);
+
+      var nodeRule = "";
+      var parentNodeRule = "";
+      if (nodeId && nodeId !== "") {
+        nodeRule = "#" + nodeId;
+      }
+      if (nodeClasses && nodeClasses.length > 0) {
+        nodeClasses = nodeClasses.map(function (nodeClass) {
+          return "." + nodeClass;
+        });
+        nodeRule = nodeRule + nodeClasses.join("");
+      }
+      if (parentNodeId && parentNodeId !== "") {
+        parentNodeRule = "#" + parentNodeId;
+      }
+      if (parentNodeClasses && parentNodeClasses.length > 0) {
+        parentNodeClasses = parentNodeClasses.map(function (nodeClass) {
+          return "." + nodeClass;
+        });
+        parentNodeRule = parentNodeRule + parentNodeClasses.join("");
+      }
+
+      if (parentNodeRule !== "" && nodeRule !== "") {
+        console.error(parentNodeRule+ ' > ' + nodeRule);
+        theElement = document.querySelector(parentNodeRule + ">" + nodeRule);
+        if (theElement) {
+          console.warn("Found Element with rule with node and parent", theElement);
+          return theElement;
+        }
+      }
+      if (parentNodeRule === "" && nodeRule !== "") {
+        theElement = document.querySelector(nodeRule);
+        if (theElement) {
+          console.warn("Found Element with rule with node", theElement);
+          return theElement;
+        }
+      }
+      if (parentNodeRule !== "" && nodeRule === "") {
+        theElement = document.querySelector(parentNodeRule+" > *:nth-child("+(Array.prototype.indexOf.call(nodeToCheck.parentNode.childNodes, nodeToCheck) + 1 )+")");
+        if (theElement) {
+          console.warn("Found Element with rule with parent", theElement);
+          return theElement;
         }
       }
 
-      if (this._debug)
-        this.log("Article content after paging: " + articleContent.innerHTML);
+      this.log("Not found element bases on rules");
 
       // Now that we've gone through the full algorithm, check to see if
       // we got any meaningful content. If we didn't, we may need to re-run
@@ -1073,20 +1108,6 @@ Readability.prototype = {
         } else {
           return null;
         }
-      } else {
-        // Find out text direction from ancestors of final top candidate.
-        var ancestors = [parentOfTopCandidate, topCandidate].concat(this._getNodeAncestors(parentOfTopCandidate));
-        this._someNode(ancestors, function(ancestor) {
-          if (!ancestor.tagName)
-            return false;
-          var articleDir = ancestor.getAttribute("dir");
-          if (articleDir) {
-            this._articleDir = articleDir;
-            return true;
-          }
-          return false;
-        });
-        return articleContent;
       }
     }
   },
@@ -1566,10 +1587,10 @@ Readability.prototype = {
   },
 
   _appendNextPage: function(nextPageLink) {
-    var doc = this._doc;
+    var doc = this._docClone;
     this._curPageNum += 1;
 
-    var articlePage = doc.createElement("DIV");
+    var articlePage = this._doc.createElement("DIV");
     articlePage.id = 'readability-page-' + this._curPageNum;
     articlePage.className = 'page';
     articlePage.innerHTML = '<p class="page-separator" title="Page ' + this._curPageNum + '">&sect;</p>';
@@ -1600,7 +1621,7 @@ Readability.prototype = {
           }
 
           // TODO: this ends up doubling up page numbers on NYTimes articles. Need to generically parse those away.
-          var page = doc.createElement("DIV");
+          var page = this._doc.createElement("DIV");
 
           // Do some preprocessing to our HTML to make it ready for appending.
           // - Remove any script tags. Swap and reswap newlines with a unicode
@@ -2038,67 +2059,20 @@ Readability.prototype = {
       }
     }
 
-    if (typeof this._doc.documentElement.firstElementChild === "undefined") {
+    if (typeof this._docClone.firstElementChild === "undefined") {
       this._getNextNode = this._getNextNodeNoElementProperties;
     }
     // Remove script tags from the document.
-    this._removeScripts(this._doc);
-
-    // FIXME: Disabled multi-page article support for now as it
-    // needs more work on infrastructure.
-
-    // Make sure this document is added to the list of parsed pages first,
-    // so we don't double up on the first page.
-    // this._parsedPages[uri.spec.replace(/\/$/, '')] = true;
-
-    // Pull out any possible next page link first.
-    // var nextPageLink = this._findNextPageLink(doc.body);
-
+    this._removeScripts(this._docClone);
     this._prepDocument();
 
-    var metadata = this._getArticleMetadata();
-    this._articleTitle = metadata.title;
-
     var articleContent = this._grabArticle();
-    if (!articleContent)
+    if (!articleContent) {
       return null;
-
-    this.log("Grabbed: " + articleContent.innerHTML);
-
-    this._postProcessContent(articleContent);
-
-    // if (nextPageLink) {
-    //   // Append any additional pages after a small timeout so that people
-    //   // can start reading without having to wait for this to finish processing.
-    //   setTimeout((function() {
-    //     this._appendNextPage(nextPageLink);
-    //   }).bind(this), 500);
-    // }
-
-    // If we haven't found an excerpt in the article's metadata, use the article's
-    // first paragraph as the excerpt. This is used for displaying a preview of
-    // the article's content.
-    if (!metadata.excerpt) {
-      var paragraphs = articleContent.getElementsByTagName("p");
-      if (paragraphs.length > 0) {
-        metadata.excerpt = paragraphs[0].textContent.trim();
-      }
     }
-
-    var textContent = articleContent.textContent;
-    return {
-      uri: this._uri,
-      title: this._articleTitle,
-      byline: metadata.byline || this._articleByline,
-      dir: this._articleDir,
-      content: articleContent.innerHTML,
-      textContent: textContent,
-      length: textContent.length,
-      excerpt: metadata.excerpt,
-    };
+    return articleContent;
   }
 };
 
-if (typeof module === "object") {
-  module.exports = Readability;
-}
+r = new Readability();
+r.parse({debug: true});
